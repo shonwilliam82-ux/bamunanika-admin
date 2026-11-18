@@ -12,8 +12,7 @@ concurrency:
   group: bamunanika-v15-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  SOURCE_ZIP: SOURCE_ZIP: BAMUNANIKA_ADMIN_V15_CORRECTED_SOURCE-2.zip
+
   SOURCE_DIR: BAMUNANIKA_ADMIN_V15_NEW
 
 jobs:
