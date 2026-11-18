@@ -187,5 +187,5 @@ jobs:
           path: BAMUNANIKA_ADMIN_V15_WINDOWS_PORTABLE.zip
           if-no-files-found: error
           retention-days: 14
-defaults:
+
   
