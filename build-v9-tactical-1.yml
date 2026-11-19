@@ -1,0 +1,98 @@
+name: Build BAMUNANIKA V9 Tactical Command Center
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'BAMUNANIKA_V9_TACTICAL_SOURCE_BUILD_PACK-2.zip'
+      - '.github/workflows/build-v9-tactical.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bamunanika-v9-holo-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Analyze and build V9 Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract V9 source package
+        run: unzip -oq BAMUNANIKA_V9_TACTICAL_SOURCE_BUILD_PACK-2.zip -d .
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Generate Android platform
+        working-directory: BAMUNANIKA_V9_TACTICAL
+        run: flutter create --platforms=android --org com.bamunanika.admin .
+      - name: Add runtime permissions
+        working-directory: BAMUNANIKA_V9_TACTICAL
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('android/app/src/main/AndroidManifest.xml')
+          s = p.read_text()
+          start = s.find('<manifest')
+          idx = s.find('>', start)
+          permissions = '\n    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n'
+          if 'android.permission.ACCESS_FINE_LOCATION' not in s:
+              s = s[:idx+1] + permissions + s[idx+1:]
+          p.write_text(s)
+          PY
+      - name: Resolve, analyze and test
+        working-directory: BAMUNANIKA_V9_TACTICAL
+        run: |
+          flutter pub get
+          dart format lib test
+          flutter analyze --no-fatal-infos
+          flutter test
+      - name: Build V9 debug APK
+        working-directory: BAMUNANIKA_V9_TACTICAL
+        run: flutter build apk --debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BAMUNANIKA-V9-TACTICAL-ANDROID-APK
+          path: BAMUNANIKA_V9_TACTICAL/build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Build V9 Windows 11 desktop application
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract V9 source package
+        shell: pwsh
+        run: Expand-Archive -Path BAMUNANIKA_V9_TACTICAL_SOURCE_BUILD_PACK-2.zip -DestinationPath . -Force
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Generate Windows platform
+        working-directory: BAMUNANIKA_V9_TACTICAL
+        run: flutter create --platforms=windows .
+      - name: Resolve, analyze and build
+        working-directory: BAMUNANIKA_V9_TACTICAL
+        run: |
+          flutter pub get
+          dart format lib test
+          flutter analyze --no-fatal-infos
+          flutter build windows --release
+      - name: Package Windows build
+        shell: pwsh
+        run: Compress-Archive -Path BAMUNANIKA_V9_TACTICAL/build/windows/x64/runner/Release/* -DestinationPath BAMUNANIKA-V9-TACTICAL-WINDOWS-PORTABLE.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BAMUNANIKA-V9-TACTICAL-WINDOWS-PORTABLE
+          path: BAMUNANIKA-V9-TACTICAL-WINDOWS-PORTABLE.zip
+          if-no-files-found: error
+          retention-days: 14
