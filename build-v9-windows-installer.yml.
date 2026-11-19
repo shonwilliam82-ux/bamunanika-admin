@@ -1,0 +1,156 @@
+
+name: Build BAMUNANIKA V9 Windows Installer
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'BAMUNANIKA_V9_TACTICAL_SOURCE_BUILD_PACK-2.zip'
+      - '.github/workflows/build-v9-windows-installer.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-installer:
+    name: Build V9 Windows 11 Setup
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify original V9 source
+        shell: pwsh
+        run: |
+          $zip = "BAMUNANIKA_V9_TACTICAL_SOURCE_BUILD_PACK-2.zip"
+          if (!(Test-Path $zip)) {
+            throw "Original V9 source ZIP was not found."
+          }
+
+      - name: Extract V9 source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "v9-source" | Out-Null
+          Expand-Archive `
+            -Path "BAMUNANIKA_V9_TACTICAL_SOURCE_BUILD_PACK-2.zip" `
+            -DestinationPath "v9-source" `
+            -Force
+
+          $pubspec = Get-ChildItem "v9-source" `
+            -Filter "pubspec.yaml" -Recurse |
+            Select-Object -First 1
+
+          if (!$pubspec) {
+            throw "No Flutter pubspec.yaml found in the V9 source."
+          }
+
+          "V9_PROJECT_DIR=$($pubspec.Directory.FullName)" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop
+        shell: pwsh
+        run: |
+          flutter config --enable-windows-desktop
+          flutter doctor -v
+
+      - name: Install project dependencies
+        shell: pwsh
+        run: |
+          Set-Location $env:V9_PROJECT_DIR
+          flutter pub get
+
+      - name: Analyze V9 source
+        shell: pwsh
+        run: |
+          Set-Location $env:V9_PROJECT_DIR
+          flutter analyze --no-fatal-infos
+
+      - name: Run Flutter tests
+        shell: pwsh
+        run: |
+          Set-Location $env:V9_PROJECT_DIR
+          if (Test-Path "test") {
+            flutter test
+          } else {
+            Write-Host "No test directory found; skipping tests."
+          }
+
+      - name: Build Windows application
+        shell: pwsh
+        run: |
+          Set-Location $env:V9_PROJECT_DIR
+          flutter create --platforms=windows .
+          flutter pub get
+          flutter build windows --release
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+
+      - name: Create Windows installer script
+        shell: pwsh
+        run: |
+          $project = $env:V9_PROJECT_DIR
+          $exe = Get-ChildItem "$project\build\windows\x64\runner\Release" `
+            -Filter "*.exe" |
+            Select-Object -First 1
+
+          if (!$exe) {
+            throw "Windows application executable not found."
+          }
+
+          $release = "$project\build\windows\x64\runner\Release"
+
+          $iss = @"
+          [Setup]
+          AppId={{BAMUNANIKA-V9-WINDOWS}}
+          AppName=BAMUNANIKA ADMIN V9
+          AppVersion=9.0.0
+          AppPublisher=BAMUNANIKA ADMIN
+          DefaultDirName={autopf}\BAMUNANIKA ADMIN V9
+          DefaultGroupName=BAMUNANIKA ADMIN V9
+          OutputDir=$env:GITHUB_WORKSPACE\installer
+          OutputBaseFilename=BAMUNANIKA-V9-Windows11-Setup
+          ArchitecturesInstallIn64BitMode=x64
+          Compression=lzma
+          SolidCompression=yes
+          WizardStyle=modern
+
+          [Files]
+          Source: "$release\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
+
+          [Icons]
+          Name: "{group}\BAMUNANIKA ADMIN V9"; Filename: "{app}\$($exe.Name)"
+          Name: "{autodesktop}\BAMUNANIKA ADMIN V9"; Filename: "{app}\$($exe.Name)"
+
+          [Run]
+          Filename: "{app}\$($exe.Name)"; Description: "Launch BAMUNANIKA ADMIN V9"; Flags: postinstall nowait skipifsilent
+          "@
+
+          New-Item -ItemType Directory -Force -Path "installer" | Out-Null
+          $iss | Set-Content "installer\BAMUNANIKA-V9.iss"
+
+      - name: Compile Windows setup installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) {
+            throw "Inno Setup compiler not found."
+          }
+          & $iscc "installer\BAMUNANIKA-V9.iss"
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: BAMUNANIKA-V9-WINDOWS11-SETUP
+          path: installer/BAMUNANIKA-V9-Windows11-Setup.exe
+          if-no-files-found: error
+          retention-days: 30
