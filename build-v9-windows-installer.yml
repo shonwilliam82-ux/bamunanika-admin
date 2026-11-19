@@ -1,0 +1,137 @@
+name: Build BAMUNANIKA V9 Windows 11 Installer
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'BAMUNANIKA_V9_TACTICAL_SOURCE_BUILD_PACK-2.zip'
+      - '.github/workflows/build-v9-windows-installer.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bamunanika-v9-windows-installer
+  cancel-in-progress: true
+
+jobs:
+  windows-installer:
+    name: Analyze, test and package V9 for Windows
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify and extract original V9 source
+        shell: pwsh
+        run: |
+          $zip = "BAMUNANIKA_V9_TACTICAL_SOURCE_BUILD_PACK-2.zip"
+          if (!(Test-Path $zip)) { throw "Original V9 source archive is missing: $zip" }
+          $destination = Join-Path $env:GITHUB_WORKSPACE "v9-source"
+          Expand-Archive -Path $zip -DestinationPath $destination -Force
+          $app = Join-Path $destination "BAMUNANIKA_V9_TACTICAL"
+          if (!(Test-Path (Join-Path $app "pubspec.yaml"))) {
+            throw "V9 Flutter project pubspec.yaml not found at $app"
+          }
+          "APP_DIR=$app" >> $env:GITHUB_ENV
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Generate Windows desktop platform
+        shell: pwsh
+        run: |
+          Set-Location $env:APP_DIR
+          flutter create --platforms=windows --org com.bamunanika.admin .
+
+      - name: Resolve Flutter dependencies
+        shell: pwsh
+        run: |
+          Set-Location $env:APP_DIR
+          flutter pub get
+
+      - name: Format, analyze and test
+        shell: pwsh
+        run: |
+          Set-Location $env:APP_DIR
+          dart format lib test
+          flutter analyze --no-fatal-infos
+          flutter test
+
+      - name: Build Windows release
+        shell: pwsh
+        run: |
+          Set-Location $env:APP_DIR
+          flutter build windows --release
+          $release = Join-Path $env:APP_DIR "build/windows/x64/runner/Release"
+          if (!(Test-Path $release)) { throw "Windows release output directory was not created" }
+          $exe = Get-ChildItem $release -Filter *.exe | Select-Object -First 1
+          if ($null -eq $exe) { throw "No application EXE found in Windows release output" }
+          "APP_RELEASE=$release" >> $env:GITHUB_ENV
+          "APP_EXE=$($exe.Name)" >> $env:GITHUB_ENV
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (!(Test-Path $iscc)) { throw "Inno Setup compiler not found at $iscc" }
+          "ISCC=$iscc" >> $env:GITHUB_ENV
+
+      - name: Create Windows setup installer
+        shell: pwsh
+        run: |
+          $script = @'
+          #define MyAppName "BAMUNANIKA V9 Tactical Command Center"
+          #define MyAppVersion "9.0.0"
+          #define MyAppExeName "__APP_EXE__"
+          [Setup]
+          AppId={{7E7A9A3E-5C24-4F56-9F3B-9A3A6D4F0909}
+          AppName={#MyAppName}
+          AppVersion={#MyAppVersion}
+          AppPublisher=BAMUNANIKA
+          DefaultDirName={autopf}\BAMUNANIKA V9
+          DefaultGroupName=BAMUNANIKA V9
+          OutputDir=__OUTPUT_DIR__
+          OutputBaseFilename=BAMUNANIKA-V9-Windows11-Setup
+          Compression=lzma2
+          SolidCompression=yes
+          WizardStyle=modern
+          ArchitecturesInstallIn64BitMode=x64
+          UninstallDisplayIcon={app}\{#MyAppExeName}
+          SetupLogging=yes
+          [Tasks]
+          Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
+          [Files]
+          Source: "__RELEASE_DIR__\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+          [Icons]
+          Name: "{group}\BAMUNANIKA V9"; Filename: "{app}\{#MyAppExeName}"
+          Name: "{autodesktop}\BAMUNANIKA V9"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+          [Run]
+          Filename: "{app}\{#MyAppExeName}"; Description: "Launch BAMUNANIKA V9"; Flags: postinstall nowait skipifsilent
+          '@
+
+          $script = $script.Replace("__APP_EXE__", $env:APP_EXE)
+          $script = $script.Replace("__OUTPUT_DIR__", "$env:GITHUB_WORKSPACE\installer")
+          $script = $script.Replace("__RELEASE_DIR__", $env:APP_RELEASE)
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\installer" | Out-Null
+          $iss = "$env:RUNNER_TEMP\BAMUNANIKA-V9-Setup.iss"
+          Set-Content -Path $iss -Value $script -Encoding ASCII
+          & $env:ISCC $iss
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed with exit code $LASTEXITCODE" }
+          $setup = "$env:GITHUB_WORKSPACE\installer\BAMUNANIKA-V9-Windows11-Setup.exe"
+          if (!(Test-Path $setup)) { throw "Setup installer was not produced" }
+          Get-Item $setup | Format-List Name,Length,FullName
+
+      - name: Upload Windows setup installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: BAMUNANIKA-V9-WINDOWS11-SETUP
+          path: installer/BAMUNANIKA-V9-Windows11-Setup.exe
+          if-no-files-found: error
+          retention-days: 30
