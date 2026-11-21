@@ -1,0 +1,196 @@
+name: Build BAMUNANIKA COMMAND V19.2 Android APK
+
+on:
+  push:
+    paths:
+      - '.github/workflows/build-v19-2-android-apk.yml'
+      - 'BAMUNANIKA_COMMAND_V19_2_GITHUB_READY.zip'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Checkout V19.2 source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Prepare V19.2 web app
+        shell: bash
+        run: |
+          set -euo pipefail
+          ZIP="BAMUNANIKA_COMMAND_V19_2_GITHUB_READY.zip"
+          test -f "$ZIP" || { echo "::error::V19.2 source ZIP is missing"; exit 1; }
+          mkdir -p source app/src/main/assets app/src/main/java/com/bamunanika/command
+          unzip -q "$ZIP" -d source
+          HTML="$(find source -type f \( -iname 'index.html' -o -iname 'Index.html' \) -print -quit)"
+          if [ -z "$HTML" ]; then
+            echo "::error::No index.html was found in the V19.2 archive"
+            find source -maxdepth 4 -type f
+            exit 1
+          fi
+          SOURCE_DIR="$(dirname "$HTML")"
+          cp -R "$SOURCE_DIR"/. app/src/main/assets/
+          if [ ! -f app/src/main/assets/index.html ]; then
+            cp "$HTML" app/src/main/assets/index.html
+          fi
+          echo "Packaged HTML source: $HTML"
+          find app/src/main/assets -maxdepth 2 -type f
+
+      - name: Create Android Gradle project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > settings.gradle <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS); repositories { google(); mavenCentral() } }
+          rootProject.name = "BamunanikaCommandV192"
+          include(":app")
+          EOF
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+          cat > app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          android {
+              namespace 'com.bamunanika.command'
+              compileSdk 35
+              defaultConfig {
+                  applicationId 'com.bamunanika.command'
+                  minSdk 23
+                  targetSdk 35
+                  versionCode 192
+                  versionName '19.2'
+              }
+          }
+          EOF
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.CAMERA" />
+              <uses-permission android:name="android.permission.RECORD_AUDIO" />
+              <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+              <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+              <uses-feature android:name="android.hardware.camera" android:required="false" />
+              <application android:theme="@android:style/Theme.Material.Light.NoActionBar" android:label="BAMUNANIKA COMMAND V19.2" android:usesCleartextTraffic="true">
+                  <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="unspecified">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          cat > app/src/main/java/com/bamunanika/command/MainActivity.java <<'EOF'
+          package com.bamunanika.command;
+
+          import android.Manifest;
+          import android.app.Activity;
+          import android.content.pm.PackageManager;
+          import android.os.Bundle;
+          import android.webkit.GeolocationPermissions;
+          import android.webkit.PermissionRequest;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          public class MainActivity extends Activity {
+              private WebView webView;
+              private PermissionRequest pendingRequest;
+              private GeolocationPermissions.Callback geoCallback;
+              private String geoOrigin;
+
+              @Override public void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  webView = new WebView(this);
+                  setContentView(webView);
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setGeolocationEnabled(true);
+                  settings.setMediaPlaybackRequiresUserGesture(false);
+                  webView.setWebViewClient(new WebViewClient());
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override public void onPermissionRequest(PermissionRequest request) {
+                          runOnUiThread(() -> {
+                              pendingRequest = request;
+                              boolean needsCamera = false;
+                              for (String resource : request.getResources()) {
+                                  if (PermissionRequest.RESOURCE_VIDEO_CAPTURE.equals(resource)) needsCamera = true;
+                              }
+                              if (!needsCamera || checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                                  grantRequestedResources();
+                              } else {
+                                  requestPermissions(new String[]{Manifest.permission.CAMERA}, 21);
+                              }
+                          });
+                      }
+                      @Override public void onGeolocationPermissionsShowPrompt(String origin, GeolocationPermissions.Callback callback) {
+                          geoOrigin = origin;
+                          geoCallback = callback;
+                          if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+                              checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+                              callback.invoke(origin, true, false);
+                          } else {
+                              requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}, 22);
+                          }
+                      }
+                  });
+                  webView.loadUrl("file:///android_asset/index.html");
+              }
+
+              private void grantRequestedResources() {
+                  if (pendingRequest == null) return;
+                  pendingRequest.grant(pendingRequest.getResources());
+                  pendingRequest = null;
+              }
+
+              @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+                  super.onRequestPermissionsResult(requestCode, permissions, results);
+                  if (requestCode == 21) {
+                      if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) grantRequestedResources();
+                      else if (pendingRequest != null) { pendingRequest.deny(); pendingRequest = null; }
+                  } else if (requestCode == 22 && geoCallback != null) {
+                      boolean granted = false;
+                      for (int result : results) if (result == PackageManager.PERMISSION_GRANTED) granted = true;
+                      geoCallback.invoke(geoOrigin, granted, false);
+                      geoCallback = null;
+                      geoOrigin = null;
+                  }
+              }
+
+              @Override public void onBackPressed() {
+                  if (webView != null && webView.canGoBack()) webView.goBack();
+                  else super.onBackPressed();
+              }
+          }
+          EOF
+
+      - name: Build V19.2 debug APK
+        run: gradle --no-daemon --stacktrace assembleDebug
+
+      - name: Upload V19.2 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: BAMUNANIKA-COMMAND-V19.2-Android-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
