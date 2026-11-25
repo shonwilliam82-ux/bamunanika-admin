@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "447077998648",
+    "firebase_url": "https://v9-command-default-rtdb.europe-west1.firebasedatabase.app",
+    "project_id": "v9-command",
+    "storage_bucket": "v9-command.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:447077998648:android:fe463bca4e6898f18386cd",
+        "android_client_info": {
+          "package_name": "Com.V9"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDTnGK_nxfUlNhVvLiLc_FmVt3DYuYyv7s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:447077998648:android:827c66b48f90b3aa8386cd",
+        "android_client_info": {
+          "package_name": "com.bamunanika.command"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDTnGK_nxfUlNhVvLiLc_FmVt3DYuYyv7s"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
